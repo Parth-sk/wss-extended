@@ -170,7 +170,7 @@ int mapidle(pid_t pid, unsigned long long mapstart, unsigned long long mapend,
             if (!(idlebits & (1ULL << (pfn % 64)))) {
                 // store PFN if within bounds
                 if (measurement->page_count < MAX_PAGES_PER_INTERVAL) {
-                    measurement->pages[measurement->page_count] = pfn;
+                    measurement->pages[measurement->page_count] = p / pagesize; //store the virtual page number, since perf output is in virtual addresses
                     measurement->page_count++;
                 }
             }
