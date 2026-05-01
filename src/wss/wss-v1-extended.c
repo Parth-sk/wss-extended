@@ -46,6 +46,7 @@
 #define _POSIX_C_SOURCE 199309L
 
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -102,7 +103,8 @@ int mapidle(pid_t pid, unsigned long long mapstart, unsigned long long mapend,
         exit(1);
     }
     if ((pagefd = open(pagepath, O_RDONLY)) < 0) {
-        perror("Can't read pagemap file");
+        // Process may have ended; return gracefully
+        if (g_debug) perror("Can't read pagemap file");
         return 2;
     }
 
@@ -110,7 +112,7 @@ int mapidle(pid_t pid, unsigned long long mapstart, unsigned long long mapend,
     flags = O_RDONLY;
     if (action == SETIDLE) flags = O_WRONLY;
     if ((idlefd = open(idlepath, flags)) < 0) {
-        perror("Can't read idlemap file");
+        if (g_debug) perror("Can't read idlemap file");
         close(pagefd);
         return 2;
     }
@@ -168,9 +170,10 @@ int mapidle(pid_t pid, unsigned long long mapstart, unsigned long long mapend,
                 goto out;
             }
             if (!(idlebits & (1ULL << (pfn % 64)))) {
-                
                 if (measurement->page_count < MAX_PAGES_PER_INTERVAL) {
-                    measurement->pages[measurement->page_count] = p ; //store the virtual address, since perf output is in virtual addresses
+                    measurement->pages[measurement->page_count] =
+                        p;  // store the virtual address, since perf output is
+                            // in virtual addresses
                     measurement->page_count++;
                 }
             }
@@ -204,8 +207,9 @@ int walkmaps(pid_t pid, int action, IntervalMeasurement* measurement) {
         exit(1);
     }
     if ((mapsfile = fopen(mapspath, "r")) == NULL) {
-        perror("Can't read maps file");
-        exit(2);
+        // Process has likely ended
+        if (g_debug) perror("Can't read maps file");
+        return 1;
     }
 
     while (fgets(line, sizeof(line), mapsfile) != NULL) {
@@ -214,7 +218,10 @@ int walkmaps(pid_t pid, int action, IntervalMeasurement* measurement) {
         if (mapstart > PAGE_OFFSET)
             continue;  // page idle tracking is user mem only
         if (mapidle(pid, mapstart, mapend, action, measurement)) {
-            printf("Error setting map %llx-%llx. Exiting.\n", mapstart, mapend);
+            if (g_debug)
+                printf("Error setting map %llx-%llx. Continuing.\n", mapstart,
+                       mapend);
+            // Continue instead of exiting, as process may have terminated
         }
     }
 
@@ -227,6 +234,11 @@ void get_time(double* time) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     *time = ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+int process_exists(pid_t pid) {
+    // Check if process exists by sending signal 0 (no actual signal sent)
+    return kill(pid, 0) == 0;
 }
 
 int main(int argc, char* argv[]) {
@@ -258,6 +270,12 @@ int main(int argc, char* argv[]) {
 
     int pagesize = getpagesize();
     IntervalMeasurement measurements[intervals];
+    // Initialize all measurements to zero
+    for (int j = 0; j < intervals; j++) {
+        measurements[j].page_count = 0;
+        measurements[j].start = 0;
+        measurements[j].end = 0;
+    }
 
     printf(
         "Watching PID %d page references during %.2f seconds x %d "
@@ -266,6 +284,13 @@ int main(int argc, char* argv[]) {
 
     // run measurement intervals
     for (i = 0; i < intervals; i++) {
+        // Check if process still exists
+        if (!process_exists(pid)) {
+            printf("Process %d has terminated. Printing collected data.\n",
+                   pid);
+            break;
+        }
+
         measurements[i].page_count = 0;
 
         // capture start time and set idle flags
@@ -274,6 +299,16 @@ int main(int argc, char* argv[]) {
 
         // sleep for duration
         usleep((int)(duration * 1000000));
+
+        // Check if process is still alive after sleep
+        if (!process_exists(pid)) {
+            printf(
+                "Process %d has terminated during measurement. Printing "
+                "collected data.\n",
+                pid);
+            get_time(&measurements[i].end);
+            break;
+        }
 
         // read idle flags and capture end time
         walkmaps(pid, READIDLE, &measurements[i]);
@@ -284,6 +319,11 @@ int main(int argc, char* argv[]) {
     printf("%-8s %12s %12s %10s %10s\n", "Interval", "Start(s)", "End(s)",
            "Ref(MB)", "Pages");
     for (i = 0; i < intervals; i++) {
+        // Skip measurements that weren't completed
+        if (measurements[i].page_count == 0 && measurements[i].start == 0) {
+            continue;
+        }
+
         mbytes = (measurements[i].page_count * pagesize) / (1024.0 * 1024.0);
         printf("%-8d %12.6f %12.6f %10.2f %10d\n", i, measurements[i].start,
                measurements[i].end, mbytes, measurements[i].page_count);
@@ -292,7 +332,6 @@ int main(int argc, char* argv[]) {
         for (int j = 0; j < measurements[i].page_count; j++) {
             printf("  PAGE 0x%llx\n", measurements[i].pages[j]);
         }
-
     }
 
     return 0;
