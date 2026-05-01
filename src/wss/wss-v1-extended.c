@@ -62,7 +62,7 @@
 #define PATHSIZE 128
 #define LINESIZE 256
 #define PAGEMAP_CHUNK_SIZE 8
-#define MAX_PAGES_PER_INTERVAL 100000
+#define MAX_PAGES_PER_INTERVAL 10000
 #define MAX_INTERVALS 100
 
 // from mm/page_idle.c:
