@@ -168,9 +168,9 @@ int mapidle(pid_t pid, unsigned long long mapstart, unsigned long long mapend,
                 goto out;
             }
             if (!(idlebits & (1ULL << (pfn % 64)))) {
-                // store PFN if within bounds
+                
                 if (measurement->page_count < MAX_PAGES_PER_INTERVAL) {
-                    measurement->pages[measurement->page_count] = p / pagesize; //store the virtual page number, since perf output is in virtual addresses
+                    measurement->pages[measurement->page_count] = p ; //store the virtual address, since perf output is in virtual addresses
                     measurement->page_count++;
                 }
             }
@@ -287,6 +287,12 @@ int main(int argc, char* argv[]) {
         mbytes = (measurements[i].page_count * pagesize) / (1024.0 * 1024.0);
         printf("%-8d %12.6f %12.6f %10.2f %10d\n", i, measurements[i].start,
                measurements[i].end, mbytes, measurements[i].page_count);
+
+        // print active virtual page addresses for joiner
+        for (int j = 0; j < measurements[i].page_count; j++) {
+            printf("  PAGE 0x%llx\n", measurements[i].pages[j]);
+        }
+
     }
 
     return 0;
